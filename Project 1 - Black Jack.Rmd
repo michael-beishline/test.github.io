@@ -1,0 +1,420 @@
+---
+title: "Project 1 - Blackjack"
+output: html_document
+date: "2023-02-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup
+
+```{r setup_1}
+face <- c('Ace', 2, 3, 4, 5, 6, 7, 8, 9, 10, 'Jack', 'Queen', 'King')
+deck <- rep(face, 4)
+
+games<-1000
+
+library(tidyr)
+library(dplyr)
+library(knitr)
+```
+
+#### Ace Function
+
+This function evaluates whether or not an Ace should be counted as 1 or 11 points throughout each game. This means, if a player has more than one Ace in a game, one of those Aces could be counted as 1 point and the other 11 points, or they all could be the same.
+
+```{r ace}
+Ace_Check <- function(df) {
+  
+  df_Tot <- df %>% group_by(Game) %>% summarise(Total=sum(as.numeric(Value)))
+  
+  for (y in (1:games)) {
+    if (df_Tot$Total[y] > 21) {
+      df_game <- df %>% filter(Game == y)
+      for (x in (1:6)) {
+        df_game$Value[x] <- ifelse(grepl('Ace',df_game$Card_Type[x]) == TRUE &
+                                     sum(as.numeric(df_game$Value)) > 21, 1,
+                                   df_game$Value[x])
+      }
+      df_game <- df_game %>% select(Game, Card, Value)
+      colnames(df_game) <- c('Game','Card','New_Value')
+      
+      df <- df %>% full_join(df_game, by = c('Game','Card'))
+      df <- df %>% mutate(Value = ifelse(is.na(New_Value) == TRUE, Value, New_Value))
+      df <- df %>% select(Game,Card,Card_Type,Value)
+    }
+  }
+  df
+}
+```
+
+#### Winners Function
+
+```{r winners}
+Winners <- function(P_Total,D_Total) {
+  Compare <- as.data.frame(P_Total)
+  Compare$Dealer_Total <- D_Total$Total
+  colnames(Compare) <- c('Game','Player_Total','Dealer_Total')
+
+  Compare$Winner <- ifelse(Compare$Player_Total > 21, 'Dealer', 'Player')
+  Compare$Winner[Compare$Winner == 'Player' & Compare$Player_Total < Compare$Dealer_Total] <- 'Dealer'
+  Compare$Winner[Compare$Player_Total < 22 & Compare$Dealer_Total > 21] <- 'Player'
+  Compare$Winner[Compare$Player_Total == Compare$Dealer_Total & Compare$Player_Total < 22 &
+                   Compare$Dealer_Total < 22] <- 'Tie'
+
+  Compare$Player_Wins <- ifelse(Compare$Winner == 'Player', 1, 0)
+  Compare$Ties <- ifelse(Compare$Winner == 'Tie', 1, 0)
+  Compare
+}
+```
+
+#### Dealer's Hands
+
+Here the dealer's hand of two cards is created for all strategies.
+
+```{r dealer}
+dealer <- data.frame(C1 = sample(deck,games,replace = TRUE), 
+                     C2 = sample(deck,games,replace = TRUE),
+                     C3 = 0,
+                     C4 = 0,
+                     C5 = 0,
+                     C6 = 0)
+
+dealer$Game<-1:games
+
+dealer <- dealer %>% gather(key = 'Card', value = 'Card_Type', -Game) %>%
+  arrange(Game)
+
+dealer$Value <- dealer$Card_Type
+
+dealer <- dealer %>%
+  mutate(Value=ifelse(grepl('Jack',Card_Type) == TRUE | 
+                        grepl('Queen',Card_Type) == TRUE | 
+                        grepl('King',Card_Type) == TRUE,
+                      10,Value))
+
+dealer$Value[grepl('Ace',dealer$Card_Type) == TRUE] <- 11
+
+dealer <- Ace_Check(dealer)
+
+kable(head(dealer))
+
+dealer_Total <- dealer %>% group_by(Game) %>% summarise(Total=sum(as.numeric(Value)))
+
+kable(head(dealer_Total))
+```
+
+#### Player's Hands
+
+Here the player's hand of two cards is created for all strategies.
+
+```{r player}
+df<-data.frame(C1 = sample(deck,games,replace = TRUE), 
+               C2 = sample(deck,games,replace = TRUE),
+               C3 = 0,
+               C4 = 0,
+               C5 = 0,
+               C6 = 0)
+
+df$Game<-1:games
+
+df <- df %>% gather(key = 'Card', value = 'Card_Type', -Game) %>%
+  arrange(Game)
+
+df$Value <- df$Card_Type
+
+df <- df %>% 
+  mutate(Value=ifelse(grepl('Jack',Card_Type) == TRUE |
+                        grepl('Queen',Card_Type) == TRUE |
+                        grepl('King',Card_Type) == TRUE,
+                      10,Value))
+
+df$Value[grepl('Ace',df$Card_Type) == TRUE] <- 11
+
+df <- Ace_Check(df)
+
+kable(head(df))
+
+df_Total <- df %>% group_by(Game) %>% summarise(Total=sum(as.numeric(Value)))
+
+kable(head(df_Total))
+```
+
+### Hit Function
+
+```{r hit_function}
+hit <- function(df,cards,data_Total,hit_until) {
+  df_hit <- df %>% filter(Card == cards)
+  
+  df_hit$Totals <- data_Total$Total
+  
+  df_hit <- df_hit %>% mutate(Card_Hit=ifelse(Totals < hit_until,sample(deck,games,replace = TRUE),Card_Type))
+  df_hit <- df_hit %>% select(Game, Card, Card_Hit)
+  df <- df %>% full_join(df_hit, by = c('Game','Card'))
+  
+  df$Card_Hit[is.na(df$Card_Hit)] <- 0
+  
+  df <- df %>% mutate(Card_Type=ifelse(Card_Type == 0, Card_Hit,Card_Type)) %>% 
+    mutate(Value=ifelse(Value == 0, Card_Hit,Value)) %>% 
+    mutate(Value=ifelse(grepl('Jack',Card_Hit) == TRUE | 
+                          grepl('Queen',Card_Hit) == TRUE | 
+                          grepl('King',Card_Hit) == TRUE, 10,Value)) %>% 
+    select(Game,Card,Card_Type,Value)
+  
+  df$Value[grepl('Ace',df$Value) == TRUE] <- 11
+  
+  df <- Ace_Check(df)
+  
+  df
+}
+```
+
+## Dealer's Hit
+
+The dealer must hit until they have at least 17 points in their hand each game.
+
+```{r dealer_hit}
+hit_numbers <- c('C3','C4','C5','C6')
+
+dealer_Total_1 <- dealer_Total
+dealer_hit <- dealer
+
+for (i in hit_numbers) {
+  if (any(dealer_Total_1$Total<17)) {
+    dealer_hit <- hit(dealer_hit,i,dealer_Total_1,17)
+    dealer_Total_1 <- dealer_hit %>% group_by(Game) %>% summarise(Total=sum(as.numeric(Value)))
+  } else {
+    break
+  }
+}
+
+
+kable(head(dealer_hit))
+kable(head(dealer_Total_1))
+```
+
+## Strategy 1
+
+The player hits until they have 15 points regardless of the dealer's shown card.
+
+```{r player_hit}
+df_Total_1 <- df_Total
+player_hit <- df
+
+for (i in hit_numbers) {
+  if (any(df_Total_1$Total<15)) {
+    player_hit <- hit(player_hit,i,df_Total_1,15)
+    df_Total_1 <- player_hit %>% group_by(Game) %>% summarise(Total=sum(as.numeric(Value)))
+  } else {
+    break
+  }
+}
+
+kable(head(player_hit))
+```
+
+#### Strategy 1 vs Dealer's Hand
+
+```{r winner_1}
+Results <- Winners(df_Total_1,dealer_Total_1)
+kable(head(Results))
+mean_player <- mean(Results$Player_Wins)*100
+mean_tie <- mean(Results$Ties)*100
+```
+
+Player won `r mean_player`% of the time.
+Player tied `r mean_tie`% of the time.
+
+## Strategy 2
+
+The player hits until they have at least ten more points than what the dealer's card shows. For example, if the dealer has a 4 shown, the player would hit until they have at least 14 points.
+
+
+#### Hit Function -- Strategy 2
+
+```{r player_hit_2}
+hits <- function(df,cards,data_Total) {
+  df_hit <- df %>% filter(Card == cards)
+  
+  df_hit$Totals <- data_Total$Total
+  df_hit$Card_Hit <- 0
+  
+  for (r in (1:games)) {
+    df_hit$Card_Hit[r] <- ifelse(df_hit$Totals[r] < (as.numeric(shown_card$Value[r]) + 
+                                                       10),sample(deck,games,replace = 
+                                                                  TRUE),df_hit$Card_Type[r])
+  }
+
+  df_hit <- df_hit %>% select(Game, Card, Card_Hit)
+  df <- df %>% full_join(df_hit, by = c('Game','Card'))
+  
+  df$Card_Hit[is.na(df$Card_Hit)] <- 0
+  
+  df <- df %>% mutate(Card_Type=ifelse(Card_Type == 0, Card_Hit,Card_Type)) %>% 
+    mutate(Value=ifelse(Value == 0, Card_Hit,Value)) %>% 
+    mutate(Value=ifelse(grepl('Jack',Card_Hit) == TRUE | 
+                          grepl('Queen',Card_Hit) == TRUE | 
+                          grepl('King',Card_Hit) == TRUE, 10,Value)) %>% 
+    select(Game,Card,Card_Type,Value)
+  
+  df$Value[grepl('Ace',df$Value) == TRUE] <- 11
+  
+  df <- Ace_Check(df)
+  
+  df
+}
+```
+
+#### Dealer's Shown Cards
+
+```{r shown_cards}
+shown_card <- dealer %>% filter(Card == 'C1')
+kable(head(shown_card))
+```
+
+#### Player's Hit -- Strategy 2
+
+```{r player_hit_2_1}
+df_Total_2 <- df_Total
+player_hit_shown <- df
+
+for (i in hit_numbers) {
+  player_hit_shown <- hits(player_hit_shown,i,df_Total_2)
+  df_Total_2 <- player_hit_shown %>% group_by(Game) %>%
+    summarise(Total=sum(as.numeric(Value)))
+}
+
+kable(head(player_hit_shown))
+```
+
+#### Strategy 2 vs Dealer's Hand
+
+```{r winner_2}
+Results_2 <- Winners(df_Total_2,dealer_Total_1)
+kable(head(Results_2))
+mean_player_2 <- mean(Results_2$Player_Wins)*100
+mean_tie_2 <- mean(Results_2$Ties)*100
+```
+
+Player won `r mean_player_2`% of the time.
+Player tied `r mean_tie_2`% of the time.
+
+## Strategy 3
+
+If the dealer's card shown is worth 7 or higher, the player hits until they have at least 18 points. For example, if the dealer had a 9 shown, the player would hit until they have at least 18 points in hand. 
+
+If the dealer's card shown is worth 6 or lower, then the player hits until they have at least 14 points. For instance, if the dealer had a 2 shown, the player would hit until they have at least 14 points.
+
+#### Hit Function -- Strategy 3
+
+```{r player_hit_3}
+hitss <- function(df,cards,data_Total,hit_until) {
+  df_hit <- df %>% filter(Card == cards)
+  
+  df_hit$Totals <- data_Total$Total
+  df_hit$Card_Hit <- 0
+  
+  for (r in (1:games)) {
+    if (as.numeric(shown_card$Value[r]) > 6) {
+      df_hit$Card_Hit[r] <- ifelse(df_hit$Totals[r] < 18,sample(deck,games,replace =
+                                                                  TRUE),df_hit$Card_Type[r])
+    }
+    if (as.numeric(shown_card$Value[r]) < 7) {
+      df_hit$Card_Hit[r] <- ifelse(df_hit$Totals[r] < hit_until,sample(deck,games,replace = 
+                                                                  TRUE),df_hit$Card_Type[r])
+    }
+  }
+  
+  df_hit <- df_hit %>% select(Game, Card, Card_Hit)
+  df <- df %>% full_join(df_hit, by = c('Game','Card'))
+  
+  df$Card_Hit[is.na(df$Card_Hit)] <- 0
+  
+  df <- df %>% mutate(Card_Type=ifelse(Card_Type == 0, Card_Hit,Card_Type)) %>% 
+    mutate(Value=ifelse(Value == 0, Card_Hit,Value)) %>% 
+    mutate(Value=ifelse(grepl('Jack',Card_Hit) == TRUE | 
+                          grepl('Queen',Card_Hit) == TRUE | 
+                          grepl('King',Card_Hit) == TRUE, 10,Value)) %>% 
+    select(Game,Card,Card_Type,Value)
+  
+  df$Value[grepl('Ace',df$Value) == TRUE] <- 11
+  
+  df <- Ace_Check(df)
+  
+  df
+}
+```
+
+#### Player's Hit -- Strategy 3
+
+```{r player_hit_3_1}
+df_Total_3 <- df_Total
+player_hit_shown_2 <- df
+
+for (i in hit_numbers) {
+  player_hit_shown_2 <- hitss(player_hit_shown_2,i,df_Total_3,14)
+  df_Total_3 <- player_hit_shown_2 %>% group_by(Game) %>% summarise(Total=sum(as.numeric(Value)))
+}
+
+kable(head(player_hit_shown_2))
+```
+
+#### Strategy 3 vs Dealer's Hand
+
+```{r winner_3}
+Results_3 <- Winners(df_Total_3,dealer_Total_1)
+kable(head(Results_3))
+mean_player_3 <- mean(Results_3$Player_Wins)*100
+mean_tie_3 <- mean(Results_3$Ties)*100
+```
+
+Player won `r mean_player_3`% of the time.
+Player tied `r mean_tie_3`% of the time.
+
+## Player Wins Per Card For Each Strategy
+
+```{r result_1}
+shown_card$Strat_1 <- Results$Player_Wins
+shown_card$Strat_2 <- Results_2$Player_Wins
+shown_card$Strat_3 <- Results_3$Player_Wins
+
+face_Total_1 <- shown_card %>% group_by(Card_Type) %>% summarise(Strat_1=sum(as.numeric(Strat_1)))
+face_Total_2 <- shown_card %>% group_by(Card_Type) %>% summarise(Strat_2=sum(as.numeric(Strat_2)))
+face_Total_3 <- shown_card %>% group_by(Card_Type) %>% summarise(Strat_3=sum(as.numeric(Strat_3)))
+
+face_Total <- as.data.frame(face_Total_1)
+face_Total$Card_Type <- ifelse(grepl('Jack',face_Total$Card_Type) == TRUE, 11,face_Total$Card_Type)
+face_Total$Card_Type <- ifelse(grepl('Queen',face_Total$Card_Type) == TRUE, 12,face_Total$Card_Type)
+face_Total$Card_Type <- ifelse(grepl('King',face_Total$Card_Type) == TRUE, 13,face_Total$Card_Type)
+face_Total$Card_Type <- ifelse(grepl('Ace',face_Total$Card_Type) == TRUE, 14,face_Total$Card_Type)
+face_Total$Card_Type <- as.numeric(face_Total$Card_Type)
+
+face_Total$Strat_1 <- as.numeric(face_Total$Strat_1)
+face_Total$Strat_2 <- as.numeric(face_Total_2$Strat_2)
+face_Total$Strat_3 <- as.numeric(face_Total_3$Strat_3)
+kable(head(face_Total))
+```
+
+## Graph Results
+
+```{r graph}
+library(ggplot2)
+
+Top_Scatter <- ggplot(face_Total, aes(x = Card_Type)) + 
+  geom_point(aes(y = Strat_1, color = "Strat_1"), shape = 16, size = 2, stroke = 1) + 
+  geom_smooth(aes(y = Strat_1), se=FALSE, colour = 'blue', linewidth = 1, linetype = 3) +
+  geom_point(aes(y = Strat_2, color="Strat_2"), position=position_jitter(h=0.15,w=0.15), shape = 16, size = 2, stroke = 1) + 
+  geom_smooth(aes(y = Strat_2), se=FALSE, colour = 'red', linewidth = 1, linetype = 3) + 
+  geom_point(aes(y = Strat_3, color="Strat_3"), position=position_jitter(h=0.15,w=0.15), shape = 16, size = 2, stroke = 1) + 
+  geom_smooth(aes(y = Strat_3), se=FALSE, colour = 'green3', linewidth = 1, linetype = 3) +
+  scale_x_continuous(breaks = c(2:14), labels = c(2, 3, 4, 5, 6, 7, 8, 9, 10, 'Jack', 'Queen', 'King', 'Ace')) +
+  labs(x = "Shown Card of Dealer", y = "Player Wins", title = "Player Wins vs. Shown Card of Dealer", color = "Legend") +
+  scale_color_manual(name='Legend',
+                     breaks=c("Strat_1", "Strat_2", "Strat_3"),
+                     values=c("Strat_1"='blue', "Strat_2"='red', "Strat_3"='green3'))
+Top_Scatter
+```
+
+From our results with the 1st strategy, it looks like hitting until you have at least 15 points in your hand is a safe bet until the dealer's shown card gets higher. The 2nd strategy can be good for the shown cards within the mild range points. However, as the shown card gets higher, strategy 2 struggles to beat the dealer compared to the other strategies. Looking at the 3rd strategy, it seems to more consistent compared to the other strategies. In this strategy, one tends to have a higher chance of winning as the dealer's shown card gets higher compared to the other strategies.
